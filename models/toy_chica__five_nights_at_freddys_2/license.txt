@@ -1,0 +1,11 @@
+Model Information:
+* title:	Toy Chica | Five Nights at Freddy's 2
+* source:	https://sketchfab.com/3d-models/toy-chica-five-nights-at-freddys-2-ed57b7c127eb44e0a90c3e17f1781640
+* author:	juztandy (https://sketchfab.com/juztandyyy)
+
+Model License:
+* license type:	CC-BY-NC-ND-4.0 (http://creativecommons.org/licenses/by-nc-nd/4.0/)
+* requirements:	Author must be credited. No commercial use. Modified versions can not be distributed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Toy Chica | Five Nights at Freddy's 2" (https://sketchfab.com/3d-models/toy-chica-five-nights-at-freddys-2-ed57b7c127eb44e0a90c3e17f1781640) by juztandy (https://sketchfab.com/juztandyyy) licensed under CC-BY-NC-ND-4.0 (http://creativecommons.org/licenses/by-nc-nd/4.0/)
