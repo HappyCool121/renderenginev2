@@ -1,8 +1,6 @@
 //
 // Created by Imari on 11/2/26.
 //
-
-
 #include "application.h"
 #include "meshProcessing.h"
 #include "assetLoader.h"
@@ -45,22 +43,21 @@ void initIMGUI(AppContext app) {
     std::cout << "Initialized SDL Renderer" << std::endl;
 }
 
-
 void SetObjectType(ShapeType type) {
     currentShape = type;
 
     // Reset default texture state for primitives if not custom
-    if (type != CUSTOM) {
-        objectToTextureIndex.clear();
-        objectToTextureIndex.push_back(0); // Use default texture
-    }
+    // if (type != CUSTOM) {
+    //     objectToTextureIndex.clear();
+    //     objectToTextureIndex.push_back(0); // Use default texture
+    // }
 
     if (type == CUBE) createUnitCube(baseMesh);
     else if (type == UV_SPHERE) createUVSphere(baseMesh, 20, 20);
     else if (type == ICOSPHERE) createIcosahedron(baseMesh);
     else if (type == CUSTOM) {
         // NOTE: Replace with your specific path
-        if(loadGLTF("FULL FILE PATH", baseMesh)) {
+        if(loadGLTF("/Users/ahmadzuhri/CLionProjects/renderenginev3/models/toy_chica__five_nights_at_freddys_2/scene.gltf", baseMesh)) {
             currentMapping = CUSTOM_UV;
             currentShadingType = TEXTURE;
         } else {
@@ -90,6 +87,7 @@ void UpdateMeshAttributes() {
 void SetUVType(MappingType type) {
     currentMapping = type;
     applyUVProjection(workingMesh, currentMapping);
+    meshList.push_back(baseMesh);
     toRender = true;
 }
 

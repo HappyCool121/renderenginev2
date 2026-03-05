@@ -5,6 +5,7 @@
 #include <iostream>
 #include "assetLoader.h"
 #include "dataTypes.h"
+#include <iostream>
 
 #define TINYGLTF_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
@@ -33,7 +34,6 @@ bool loadGLTF(const std::string& filename, Mesh& mesh) {
     // 1. Reset Scene Data
     mesh.vertices.clear();
     mesh.indices.clear();
-    objectToTextureIndex.clear();
 
     // 2. Texture Management
     // If this is the first load, ensure default texture exists at index 0.
@@ -73,7 +73,7 @@ bool loadGLTF(const std::string& filename, Mesh& mesh) {
 
     // 3. Process Meshes
     // We assign a unique objectID for every primitive (sub-mesh) found
-    int currentObjectID = 0;
+    int localObjectID = currentObjectID;
 
     for (const auto& gltfMesh : model.meshes) {
         for (const auto& primitive : gltfMesh.primitives) {
@@ -103,10 +103,10 @@ bool loadGLTF(const std::string& filename, Mesh& mesh) {
 
             // --- B. Register Object ID mapping ---
             // Ensure map is large enough
-            if (objectToTextureIndex.size() <= currentObjectID) {
-                objectToTextureIndex.resize(currentObjectID + 1);
+            if (objectToTextureIndex.size() <= localObjectID) {
+                objectToTextureIndex.resize(localObjectID + 1);
             }
-            objectToTextureIndex[currentObjectID] = engineTextureIndex;
+            objectToTextureIndex[localObjectID] = engineTextureIndex;
 
             // --- C. Extract Geometry ---
             auto itPos = primitive.attributes.find("POSITION");
@@ -154,7 +154,7 @@ bool loadGLTF(const std::string& filename, Mesh& mesh) {
 
                 v.color = {1.0f, 1.0f, 1.0f};
                 v.normal = {0.0f, 0.0f, 0.0f}; // Computed later in main loop
-                v.objectID = currentObjectID;  // IMPORTANT: Assign current ID
+                v.objectID = localObjectID;  // IMPORTANT: Assign current ID
 
                 mesh.vertices.push_back(v);
             }
@@ -247,9 +247,14 @@ bool loadGLTF(const std::string& filename, Mesh& mesh) {
             }
 
             // Move to next Object ID
-            currentObjectID++;
+            localObjectID++;
         }
     }
+
+
+    //currentObjectID = localObjectID + currentObjectID;
+
+    std::cout << " current object ID (custom import after) " << currentObjectID << std::endl;
 
     return !mesh.vertices.empty();
 }

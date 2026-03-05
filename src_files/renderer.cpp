@@ -21,7 +21,7 @@ void render() {
     float cY = std::cos(objRot.y), sY = std::sin(objRot.y);
     float cX = std::cos(objRot.x), sX = std::sin(objRot.x);
 
-    // CHANGED: Include objectID in transformed vertex
+    // Include objectID in transformed vertex
     struct TransformedVert {
         Vec3 viewPos; Vec3 color; Vec2 uv; float intensity;
         Vec3 invNorm; Vec3 invCoords; float invDepth;

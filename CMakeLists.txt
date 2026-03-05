@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew")
 
 find_package(SDL2 REQUIRED)
+find_package(glm REQUIRED)
 
 set(IMGUI_SOURCES
         imgui/imgui.cpp
@@ -18,6 +19,9 @@ set(IMGUI_SOURCES
         src_files/renderer.cpp
         header_files/application.h
         src_files/application.cpp
+        src_files/raytracer.cpp
+        src_files/raytracer.cpp
+        header_files/raytracer.h
 )
 
 add_executable(renderenginev2
@@ -36,4 +40,6 @@ target_include_directories(renderenginev2 PUBLIC
         tinygltf
 )
 
-target_link_libraries(renderenginev2 SDL2::SDL2)
+target_link_libraries(renderenginev2
+        SDL2::SDL2
+        glm::glm)

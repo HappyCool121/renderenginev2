@@ -1,0 +1,770 @@
+Index: src_files/raytracer.cpp
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/src_files/raytracer.cpp b/src_files/raytracer.cpp
+--- a/src_files/raytracer.cpp
++++ b/src_files/raytracer.cpp	(date 1772290670644)
+@@ -2,36 +2,24 @@
+ // Created by Imari on 25/2/26.
+ //
+ 
++#include "raytracer.h"
++#include "application.h"
+ #include "renderer.h"
+-#include "application.h"
+-#include "raytracer.h"
+-#include <glm/glm.hpp>
+-#include <glm/gtc/matrix_transform.hpp>
+-#include <vector>
+ #include <iostream>
+ #include <numeric>
++#include <algorithm>
++#include <cmath>
++#include <glm/gtc/matrix_transform.hpp>
+ 
+-/// How does the engine work?
+-///
+-/// build scene BVH for all primitive objects (BLAS)
+-/// apply all transforms
+-/// build scene BVH for instances (TLAS)
+-///
+-/// Traversal:
+-/// hierarchy of traversal:
+-/// TLAS -> BLAS -> triangle
+-///
+-/// shade pixel at ray intersection with triangle
+-
+-#include "dataTypes.h"
+-#include <vector>
++// ===========================================================
++// PART 1: BVH CONSTRUCTION
++// ===========================================================
+ 
+ void resetAABB(Vec3& min, Vec3& max) {
+     min = {  1e30f,  1e30f,  1e30f };
+     max = { -1e30f, -1e30f, -1e30f };
+ }
+ 
+-// Helper to expand a box to include a vertex
+ void growAABB(Vec3& min, Vec3& max, const Vec3& p) {
+     if (p.x < min.x) min.x = p.x;
+     if (p.y < min.y) min.y = p.y;
+@@ -41,27 +29,6 @@
+     if (p.z > max.z) max.z = p.z;
+ }
+ 
+-// initialize BVH building process
+-void startBuild(BLAS& blas, const Mesh& mesh) {
+-
+-    // clear previous nodes, create indices for triangles
+-    blas.nodes.clear();
+-    blas.triangleIndices.resize(mesh.indices.size());
+-
+-    // Fill indices 0,1,2,3...
+-    std::iota(blas.triangleIndices.begin(), blas.triangleIndices.end(), 0);
+-
+-    // Create Root Node
+-    BLAS_node root;
+-    root.leftFirst = 0;
+-    root.triangleCount = (int)mesh.indices.size();
+-    blas.nodes.push_back(root);
+-
+-    // Build
+-    buildBVH(0, blas, mesh.vertices, mesh.indices);
+-}
+-
+-// get the tightest AABB bounds based on the vertices of the triangles
+ void updateNodeBounds(int nodeIdx, BLAS& blas, const std::vector<Vertex>& vertices, const std::vector<Triangle>& triangles) {
+     BLAS_node& node = blas.nodes[nodeIdx];
+     node.minAABB = { 1e30f, 1e30f, 1e30f };
+@@ -77,23 +44,17 @@
+     }
+ }
+ 
+-// main recursive BVH builder
++// recursive BVH BLAS builder
+ void buildBVH(int nodeIdx, BLAS& blas, const std::vector<Vertex>& vertices, const std::vector<Triangle>& triangles) {
+-    // 1. Calculate the AABB for the current node
+-    // (Note: For optimization, we usually refit from children later, but calculating from tris here is safer for a start)
+     updateNodeBounds(nodeIdx, blas, vertices, triangles);
+ 
+-    // Get a reference to the current node (CAREFUL: Don't hold this ref across push_backs!)
+     int count = blas.nodes[nodeIdx].triangleCount;
+     int first = blas.nodes[nodeIdx].leftFirst;
+ 
+-    // 2. Leaf Condition
+-    if (count <= 4) {
+-        return; // It's a leaf, we are done
+-    }
++    // Leaf Condition
++    if (count <= 4) return;
+ 
+-    // 3. Partitioning Logic (Middle Split)
+-    // Re-fetch bounds because we need them for the split
++    // Split condition
+     Vec3 minAABB = blas.nodes[nodeIdx].minAABB;
+     Vec3 maxAABB = blas.nodes[nodeIdx].maxAABB;
+ 
+@@ -106,17 +67,11 @@
+                      (axis == 1) ? (minAABB.y + maxAABB.y) * 0.5f :
+                                    (minAABB.z + maxAABB.z) * 0.5f;
+ 
+-    // Partition indices
+-    int i = first;
+-    int j = first + count - 1;
+-
+-    // Using Hoare partition logic manually or std::partition
+     int mid = first;
+     auto it = std::partition(blas.triangleIndices.begin() + first,
+                              blas.triangleIndices.begin() + first + count,
+                              [&](uint32_t idx) {
+         const Triangle& tri = triangles[idx];
+-        // Calculate centroid
+         Vec3 v0 = vertices[tri.v0].pos;
+         Vec3 v1 = vertices[tri.v1].pos;
+         Vec3 v2 = vertices[tri.v2].pos;
+@@ -128,168 +83,122 @@
+ 
+     mid = (int)std::distance(blas.triangleIndices.begin(), it);
+ 
+-    // 4. Fallback: If partition failed to split (all on one side), force split in half
+     if (mid == first || mid == first + count) {
+         mid = first + (count / 2);
+     }
+ 
+-    // 5. Create Child Nodes
+-    // IMPORTANT: Access 'nodes' only by index after this point, because push_back might reallocate!
+     int leftChildIdx = (int)blas.nodes.size();
+     int rightChildIdx = leftChildIdx + 1;
+ 
+-    // Push two empty nodes
+     blas.nodes.emplace_back();
+     blas.nodes.emplace_back();
+ 
+-    // 6. Update Parent Node (mark as internal)
+-    blas.nodes[nodeIdx].leftFirst = leftChildIdx; // Point to left child
+-    blas.nodes[nodeIdx].triangleCount = 0;        // 0 marks it as internal
++    blas.nodes[nodeIdx].leftFirst = leftChildIdx;
++    blas.nodes[nodeIdx].triangleCount = 0;
+ 
+-    // 7. Initialize Child Nodes
+     blas.nodes[leftChildIdx].leftFirst = first;
+     blas.nodes[leftChildIdx].triangleCount = mid - first;
+ 
+     blas.nodes[rightChildIdx].leftFirst = mid;
+     blas.nodes[rightChildIdx].triangleCount = (first + count) - mid;
+ 
+-    // 8. Recurse
+     buildBVH(leftChildIdx, blas, vertices, triangles);
+     buildBVH(rightChildIdx, blas, vertices, triangles);
+ }
+ 
++void startBuild(BLAS& blas, const Mesh& mesh) {
++    blas.nodes.clear();
++    blas.triangleIndices.resize(mesh.indices.size());
++    std::iota(blas.triangleIndices.begin(), blas.triangleIndices.end(), 0);
+ 
+-// start TLAS BVH build
+-// create TLAS and TLAS nodes that point to TLAS instances
+-// TLAS instances are built in the actual scene (they are given, no need to build them)
++    BLAS_node root;
++    root.leftFirst = 0;
++    root.triangleCount = (int)mesh.indices.size();
++    blas.nodes.push_back(root);
+ 
+-// creating 4x4 transform matrix for TLAS instance
++    buildBVH(0, blas, mesh.vertices, mesh.indices);
++}
++
+ void updateTLASInstanceTransform(const renderObject& obj, TLASinstance& instance) {
+-    // 1. Start with an Identity Matrix
++    // 1. Start Identity
+     glm::mat4 transform = glm::mat4(1.0f);
+ 
+-    // 2. Apply Translation (T)
++    // 2. Translate
+     transform = glm::translate(transform, glm::vec3(obj.translation.x, obj.translation.y, obj.translation.z));
+ 
+-    // 3. Apply Rotation (R)
+-    // Usually applied in Y -> X -> Z or Z -> Y -> X order to avoid gimbal lock.
+-    // We convert degrees to radians: radians = degrees * (PI / 180)
++    // 3. Rotate
+     transform = glm::rotate(transform, glm::radians(obj.rotation.y), glm::vec3(0, 1, 0));
+     transform = glm::rotate(transform, glm::radians(obj.rotation.x), glm::vec3(1, 0, 0));
+     transform = glm::rotate(transform, glm::radians(obj.rotation.z), glm::vec3(0, 0, 1));
+ 
+-    // 4. Apply Scale (S)
++    // 4. Scale
+     transform = glm::scale(transform, glm::vec3(obj.scale.x, obj.scale.y, obj.scale.z));
+ 
+-    // 5. Store in the instance
+     instance.transform = transform;
+-
+-    // 6. Calculate and store the Inverse for Ray Traversal
+     instance.inverseTransform = glm::inverse(transform);
+-
+-    // Set the BLAS index to match the mesh primitive
+     instance.BLASindex = obj.meshIndex;
+ }
+ 
+-// update transformed AALB
+ void updateInstanceBounds(TLASinstance& instance, const BLAS& blas) {
+-    // 1. Safety check: if BLAS has no nodes, we can't calculate bounds
+     if (blas.nodes.empty()) {
+         instance.transformedMinAABB = { 0, 0, 0 };
+         instance.transformedMaxAABB = { 0, 0, 0 };
+         return;
+     }
+ 
+-    // 2. Get the Local AABB from the Root Node (Index 0) of the BLAS
+     const BLAS_node& rootNode = blas.nodes[0];
+     Vec3 min = rootNode.minAABB;
+     Vec3 max = rootNode.maxAABB;
+ 
+-    // 3. Define the 8 corners of the local AABB
+-    // We convert your custom Vec3 to glm::vec4 (w=1.0 for points) for multiplication
+     glm::vec4 corners[8] = {
+-        glm::vec4(min.x, min.y, min.z, 1.0f),
+-        glm::vec4(min.x, min.y, max.z, 1.0f),
+-        glm::vec4(min.x, max.y, min.z, 1.0f),
+-        glm::vec4(min.x, max.y, max.z, 1.0f),
+-        glm::vec4(max.x, min.y, min.z, 1.0f),
+-        glm::vec4(max.x, min.y, max.z, 1.0f),
+-        glm::vec4(max.x, max.y, min.z, 1.0f),
+-        glm::vec4(max.x, max.y, max.z, 1.0f)
++        glm::vec4(min.x, min.y, min.z, 1.0f), glm::vec4(min.x, min.y, max.z, 1.0f),
++        glm::vec4(min.x, max.y, min.z, 1.0f), glm::vec4(min.x, max.y, max.z, 1.0f),
++        glm::vec4(max.x, min.y, min.z, 1.0f), glm::vec4(max.x, min.y, max.z, 1.0f),
++        glm::vec4(max.x, max.y, min.z, 1.0f), glm::vec4(max.x, max.y, max.z, 1.0f)
+     };
+ 
+-    // 4. Transform the corners into World Space
+-    // We initialize world bounds to inverted infinity
+     glm::vec3 worldMin(1e30f);
+     glm::vec3 worldMax(-1e30f);
+-
+-    // Assuming instance.transform is a glm::mat4.
+-    // If it's your custom mat4, you might need to cast it:
+-    // glm::mat4 m = *reinterpret_cast<const glm::mat4*>(&instance.transform);
+     const glm::mat4& transform = instance.transform;
+ 
+     for (int i = 0; i < 8; i++) {
+-        // Apply the transformation matrix
+         glm::vec4 transformedCorner = transform * corners[i];
+-
+-        // Update the World AABB grow logic
+-        // We use glm::vec3(transformedCorner) to drop the W component
+         worldMin.x = std::min(worldMin.x, transformedCorner.x);
+         worldMin.y = std::min(worldMin.y, transformedCorner.y);
+         worldMin.z = std::min(worldMin.z, transformedCorner.z);
+-
+         worldMax.x = std::max(worldMax.x, transformedCorner.x);
+         worldMax.y = std::max(worldMax.y, transformedCorner.y);
+         worldMax.z = std::max(worldMax.z, transformedCorner.z);
+     }
+ 
+-    // 5. Store the result back into the instance (converting back to custom Vec3)
+     instance.transformedMinAABB = { worldMin.x, worldMin.y, worldMin.z };
+     instance.transformedMaxAABB = { worldMax.x, worldMax.y, worldMax.z };
+ }
+ 
+-// -----------------------------------------------------------
+-// Helper: Update bounds for a specific TLAS node
+-// -----------------------------------------------------------
+ void updateTLASNodeBounds(int nodeIdx, TLAS& tlas, const std::vector<TLASinstance>& instances) {
+     TLASNode& node = tlas.nodes[nodeIdx];
+     node.minAABB = { 1e30f, 1e30f, 1e30f };
+     node.maxAABB = { -1e30f, -1e30f, -1e30f };
+ 
+     for (int i = 0; i < node.instanceCount; i++) {
+-        // Access the instance via the indirect index list
+         uint32_t instanceIdx = tlas.TLASindices[node.firstInstanceIndex + i];
+         const TLASinstance& inst = instances[instanceIdx];
+-
+-        // A TLAS node's AABB must encompass the AABBs of all its instances
+-        // We grow the node bounds by the Min AND Max of the instance bounds
+         growAABB(node.minAABB, node.maxAABB, inst.transformedMinAABB);
+         growAABB(node.minAABB, node.maxAABB, inst.transformedMaxAABB);
+     }
+ }
+ 
+-// -----------------------------------------------------------
+-// Recursive TLAS Builder
+-// -----------------------------------------------------------
+ void buildTLAS(int nodeIdx, TLAS& tlas, const std::vector<TLASinstance>& instances) {
+-    // 1. Calculate AABB for current node
+     updateTLASNodeBounds(nodeIdx, tlas, instances);
+ 
+-    // Get reference values (Don't hold reference to vector element across push_back)
+     int count = tlas.nodes[nodeIdx].instanceCount;
+     int first = tlas.nodes[nodeIdx].firstInstanceIndex;
+ 
+-    // 2. Leaf Condition
+-    // TLAS usually has fewer elements than BLAS, 2 is a good threshold
+-    if (count <= 2) {
+-        return;
+-    }
++    // Leaf Condition
++    if (count <= 2) return;
+ 
+-    // 3. Partitioning Logic (Middle Split)
+     Vec3 minAABB = tlas.nodes[nodeIdx].minAABB;
+     Vec3 maxAABB = tlas.nodes[nodeIdx].maxAABB;
+-
+-    // Determine split axis based on longest extent
+     Vec3 extent = { maxAABB.x - minAABB.x, maxAABB.y - minAABB.y, maxAABB.z - minAABB.z };
+     int axis = 0;
+     if (extent.y > extent.x) axis = 1;
+@@ -299,320 +208,261 @@
+                      (axis == 1) ? (minAABB.y + maxAABB.y) * 0.5f :
+                                    (minAABB.z + maxAABB.z) * 0.5f;
+ 
+-    // 4. Partition the indices array
+     int mid = first;
+     auto it = std::partition(tlas.TLASindices.begin() + first,
+                              tlas.TLASindices.begin() + first + count,
+                              [&](uint32_t idx) {
+         const TLASinstance& inst = instances[idx];
+-
+-        // Calculate centroid of the Instance AABB
+-        // (inst.min + inst.max) / 2
+         float centroid = (axis == 0) ? (inst.transformedMinAABB.x + inst.transformedMaxAABB.x) * 0.5f :
+                          (axis == 1) ? (inst.transformedMinAABB.y + inst.transformedMaxAABB.y) * 0.5f :
+                                        (inst.transformedMinAABB.z + inst.transformedMaxAABB.z) * 0.5f;
+-
+         return centroid < splitPos;
+     });
+ 
+     mid = (int)std::distance(tlas.TLASindices.begin(), it);
++    if (mid == first || mid == first + count) mid = first + (count / 2);
+ 
+-    // 5. Fallback: If partition failed (one side empty), force split in half
+-    if (mid == first || mid == first + count) {
+-        mid = first + (count / 2);
+-    }
+-
+-    // 6. Create Child Nodes
+     int leftChildIdx = (int)tlas.nodes.size();
+     int rightChildIdx = leftChildIdx + 1;
+ 
+     tlas.nodes.emplace_back();
+     tlas.nodes.emplace_back();
+ 
+-    // 7. Update Parent Node (mark as internal)
+-    tlas.nodes[nodeIdx].leftIndex = leftChildIdx; // Point to left child
+-    tlas.nodes[nodeIdx].instanceCount = 0;        // 0 marks it as internal
+-    // Note: firstInstanceIndex is usually ignored for internal nodes,
+-    // or reused. Your struct definition implies firstInstanceIndex is for leaves.
++    tlas.nodes[nodeIdx].leftIndex = leftChildIdx;
++    tlas.nodes[nodeIdx].instanceCount = 0;
+ 
+-    // 8. Initialize Child Nodes
+     tlas.nodes[leftChildIdx].firstInstanceIndex = first;
+     tlas.nodes[leftChildIdx].instanceCount = mid - first;
+-    tlas.nodes[leftChildIdx].nodeIndex = leftChildIdx; // Optional: track self index
++    tlas.nodes[leftChildIdx].nodeIndex = leftChildIdx;
+ 
+     tlas.nodes[rightChildIdx].firstInstanceIndex = mid;
+     tlas.nodes[rightChildIdx].instanceCount = (first + count) - mid;
+-    tlas.nodes[rightChildIdx].nodeIndex = rightChildIdx; // Optional
++    tlas.nodes[rightChildIdx].nodeIndex = rightChildIdx;
+ 
+-    // 9. Recurse
+     buildTLAS(leftChildIdx, tlas, instances);
+     buildTLAS(rightChildIdx, tlas, instances);
+ }
+ 
+-// -----------------------------------------------------------
+-// Entry Point: Start TLAS Build
+-// -----------------------------------------------------------
+ void startTLASBuild() {
+-    // Ensure we have instances to build
+     if (TLASinstanceList.empty()) return;
+ 
+-    // Reset TLAS data
+     mainTLAS.nodes.clear();
+     mainTLAS.TLASindices.resize(TLASinstanceList.size());
+-
+-    // Fill indices 0, 1, 2...
+     std::iota(mainTLAS.TLASindices.begin(), mainTLAS.TLASindices.end(), 0);
+ 
+-    // Create Root Node
+     TLASNode root;
+-    root.minAABB = { 0,0,0 }; // Will be updated in build
++    root.minAABB = { 0,0,0 };
+     root.maxAABB = { 0,0,0 };
+     root.firstInstanceIndex = 0;
+     root.instanceCount = (uint32_t)TLASinstanceList.size();
+     root.nodeIndex = 0;
+-    root.leftIndex = 0; // Invalid for leaf, but safer init
+-
++    root.leftIndex = 0;
+     mainTLAS.nodes.push_back(root);
+ 
+-    // Start Recursive Build
+-    // We pass the global mainTLAS and TLASinstanceList
+     buildTLAS(0, mainTLAS, TLASinstanceList);
+ }
+ 
+-// -----------------------------------------------------------
+-// Combined Entry Point (Matches your header declarations) (not in use)
+-// -----------------------------------------------------------
+-// void buildBVH() {
+-//     // 1. Build BLAS for all meshes (if not already done)
+-//     // Assuming meshPrimitiveList and BLASlist are populated and 1:1
+-//
+-//     // Resize BLAS list if needed or assume it's pre-allocated
+-//     if (BLASlist.size() != meshPrimitiveList.size()) {
+-//         BLASlist.resize(meshPrimitiveList.size());
+-//     }
+-//
+-//     for (size_t i = 0; i < meshPrimitiveList.size(); ++i) {
+-//         startBuild(BLASlist[i], meshPrimitiveList[i]);
+-//     }
+-//
+-//     // 2. Build TLAS
+-//     // Important: Ensure TLAS instances have their Transformed AABBs calculated
+-//     // BEFORE building the TLAS.
+-//     for(auto& instance : TLASinstanceList) {
+-//         // You likely need a function here to update the instance AABB
+-//         // based on the underlying BLAS bounds * transform.
+-//         // Pseudo-code example:
+-//         // const BLAS& blas = BLASlist[instance.BLASindex];
+-//         // updateInstanceBounds(instance, blas);
+-//     }
+-//
+-//     startTLASBuild();
+-// }
+-
+-// important points regarding the raytracing function
+-// the meshes that are to be rendered are in the world space, the default position, rotation, and scale of the primitive meshes
+-// all the transformations are applied to the meshes, and where they now lie in the view space
+-// the BVH is built in the view space
+-// any time a transformation is done on the meshes in the scene,
+-// will only update TLAS (provided that the BLAS is already built for the primitve meshes)
+-
+-// what to do for raytracer:
+-
+-// main structure:
+ 
+-// 1. pixel ray creation
+-// 2. BVH ray traversal (TLAS, BLAS)
+-// 3. pixel color calculation
++// ===========================================================
++// PART 2: RAY TRAVERSAL & INTERSECTION
++// ===========================================================
+ 
+-// pixel ray creation:
++// Optimized Slab Method
++bool intersectAABB(const pixelCoordinates& ray, const Vec3& minAABB, const Vec3& maxAABB, float& tEntry, float tMax) {
++    float invDirX = 1.0f / (std::abs(ray.directionVector.x) < 1e-6f ? 1e-6f : ray.directionVector.x);
++    float invDirY = 1.0f / (std::abs(ray.directionVector.y) < 1e-6f ? 1e-6f : ray.directionVector.y);
++    float invDirZ = 1.0f / (std::abs(ray.directionVector.z) < 1e-6f ? 1e-6f : ray.directionVector.z);
+ 
+-// define camera + screen position
+-// define camera settings (FOV, scale)
+-// define screen resoltion, width x height
+-// define screen size (based on camera FOV)
+-// compute world pixel coordinates (indexed by pixel resolution)
+-//      stored in std::vector<pixelCoordinates>
+-// compute pixel ray direction for each pixel
++    float t0x = (minAABB.x - ray.origin.x) * invDirX;
++    float t1x = (maxAABB.x - ray.origin.x) * invDirX;
++    if (invDirX < 0.0f) std::swap(t0x, t1x);
+ 
++    float t0y = (minAABB.y - ray.origin.y) * invDirY;
++    float t1y = (maxAABB.y - ray.origin.y) * invDirY;
++    if (invDirY < 0.0f) std::swap(t0y, t1y);
+ 
+-// BVH ray traversal
++    float t0z = (minAABB.z - ray.origin.z) * invDirZ;
++    float t1z = (maxAABB.z - ray.origin.z) * invDirZ;
++    if (invDirZ < 0.0f) std::swap(t0z, t1z);
+ 
+-// for each ray,
+-// traverse through TLAS
+-// traverse through TLAS instance
+-// traverse through BLAS
+-// get:
+-//      1. world coordinate of intersection (MOST IMPT)
+-//      2. distance from camera (t distance)
+-//      2. normal vector of intersection
+-//      3. vertex color of point of intersection
++    float tMinVal = std::max({ t0x, t0y, t0z });
++    float tMaxVal = std::min({ t1x, t1y, t1z });
+ 
+-// compute shader color
++    if (tMaxVal < tMinVal || tMaxVal < 0 || tMinVal > tMax) {
++        return false;
++    }
+ 
+-// color from black to white based on z distance
+-
+-// helper function to help with node intersection using min and max AABB:
+-bool intersectAABB (pixelCoordinates ray, Vec3 minAABB, Vec3 maxAABB, float& closestT) {
+-    // for each axis, we compute the t distance as the ray enters and exits the slab
+-    float txmin = ((minAABB.x - 0)/ray.directionVector.x);
+-    float tymin = ((minAABB.y - 0)/ray.directionVector.y);
+-    float tzmin = ((minAABB.z - 0)/ray.directionVector.z);
+-
+-    float txmax = ((maxAABB.x - 0)/ray.directionVector.x);
+-    float tymax = ((maxAABB.y - 0)/ray.directionVector.y);
+-    float tzmax = ((maxAABB.z - 0)/ray.directionVector.z);
+-
+-    float tEntry = std::min({txmin, tymin, tzmin});
+-    float tExit = std::max({txmax, tymax, tzmax});
+-
+-    if (tEntry < tExit && tExit > 0) {
+-        closestT = tEntry;
+-        return true;
+-    }
+-    else if (tExit < tEntry) {
+-        return false;
+-    }
++    tEntry = tMinVal;
++    return true;
+ }
+ 
+-// Function to transform a World Ray into an Object Local Ray
++// Transform Ray to Local Space (Direction is NOT normalized to preserve 't' distance scale)
+ pixelCoordinates transformRay(const pixelCoordinates& worldRay, const glm::mat4& invTransform) {
+     pixelCoordinates localRay;
+-
+-    // 1. Transform Position (Origin) - w = 1.0 (Include Translation)
+-    glm::vec4 localOrigin = invTransform * glm::vec4(worldRay.pos.x, worldRay.pos.y, worldRay.pos.z, 1.0f);
++    glm::vec4 localOrigin = invTransform * glm::vec4(worldRay.origin.x, worldRay.origin.y, worldRay.origin.z, 1.0f);
+     localRay.origin = { localOrigin.x, localOrigin.y, localOrigin.z };
+ 
+-    // 2. Transform Direction - w = 0.0 (Ignore Translation)
+     glm::vec4 localDir = invTransform * glm::vec4(worldRay.directionVector.x, worldRay.directionVector.y, worldRay.directionVector.z, 0.0f);
+     localRay.directionVector = { localDir.x, localDir.y, localDir.z };
+-
+     return localRay;
+ }
+ 
+-// Returns the distance 't' from the ray origin to the intersection.
+-// Returns a very large number (like 1e30f) if no intersection occurs.
++// Moeller-Trumbore intersection
+ float intersectTriangle(const pixelCoordinates& localRay, const Triangle& tri, const std::vector<Vertex>& vertices) {
+-    // 1. Get actual vertex positions
+     const Vec3& v0 = vertices[tri.v0].pos;
+     const Vec3& v1 = vertices[tri.v1].pos;
+     const Vec3& v2 = vertices[tri.v2].pos;
+ 
+-    // 2. Find vectors for two edges sharing v0
+     Vec3 edge1 = { v1.x - v0.x, v1.y - v0.y, v1.z - v0.z };
+     Vec3 edge2 = { v2.x - v0.x, v2.y - v0.y, v2.z - v0.z };
+ 
+-    // 3. Begin calculating determinant - also used to calculate barycentric 'u' parameter
+     Vec3 h = cross(localRay.directionVector, edge2);
+     float a = dot(edge1, h);
+ 
+-    // If 'a' is near zero, the ray is parallel to the triangle
+-    if (a > -0.00001f && a < 0.00001f) return 1e30f;
++    if (a > -1e-6f && a < 1e-6f) return 1e30f;
+ 
+     float f = 1.0f / a;
+     Vec3 s = { localRay.origin.x - v0.x, localRay.origin.y - v0.y, localRay.origin.z - v0.z };
+     float u = f * dot(s, h);
+ 
+-    // Check if the intersection lies outside the triangle
+     if (u < 0.0f || u > 1.0f) return 1e30f;
+ 
+     Vec3 q = cross(s, edge1);
+     float v = f * dot(localRay.directionVector, q);
+ 
+-    // Check if the intersection lies outside the triangle
+     if (v < 0.0f || u + v > 1.0f) return 1e30f;
+ 
+-    // 4. At this stage we can compute t to find out where the intersection point is on the line.
+     float t = f * dot(edge2, q);
+ 
+-    if (t > 0.00001f) { // Ray intersection
+-        return t;
+-    } else { // This means there is a line intersection but not a ray intersection
+-        return 1e30f;
+-    }
++    if (t > 1e-4f) return t;
++    return 1e30f;
+ }
+ 
+-void traverseBVH (TLAS& TLAS, std::vector<BLAS>& BLASlist, pixelCoordinates& ray) {
+-    float closestT = INFINITY;
+-    int hitTriangle = -1;
+-    int hitInstance = -1;
++// Traverse BVH
++void traverseBVH(TLAS& tlas, std::vector<BLAS>& blasList, const std::vector<Mesh>& meshes, pixelCoordinates& ray, hitRecord& rec) {
++    rec.t = 1e30f;
++    rec.hit = false;
+ 
+-    // 1. TLAS Traversal Stack (stores integer values of the indexes of the nodes)
+     uint32_t tlasStack[64];
+     uint32_t tlasStackPtr = 0;
+-    tlasStack[tlasStackPtr++] = 0; // Start at TLAS root (index 0)
++    tlasStack[tlasStackPtr++] = 0;
+ 
+     while (tlasStackPtr > 0) {
+-        // look at the topmost node in the stack and remove it
+-        // if there is a hit, its child nodes will be pushed to the stack
+-        TLASNode& node = TLAS.nodes[tlasStack[--tlasStackPtr]];
++        TLASNode& node = tlas.nodes[tlasStack[--tlasStackPtr]];
++        float tBoxEntry;
+ 
+-        // if no hit for the current node, continue (we already removed it from the stack)
+-        if (!intersectAABB(ray, node.minAABB, node.maxAABB, closestT)) {
+-            continue;
+-        }
++        if (!intersectAABB(ray, node.minAABB, node.maxAABB, tBoxEntry, rec.t)) continue;
+ 
+-        // if it is a leaf node, recurse into the instances
+         if (node.instanceCount > 0) {
+-            // look through all the instances in the leaf node
+             for (uint32_t i = 0; i < node.instanceCount; i++) {
+-                // get index of TLAS instance
+-                uint32_t instIdx = TLAS.TLASindices[node.firstInstanceIndex + i];
++                uint32_t instIdx = tlas.TLASindices[node.firstInstanceIndex + i];
++                TLASinstance& instance = TLASinstanceList[instIdx];
+ 
+-                // get actual TLAS instance
+-                TLASinstance instance = TLASinstanceList[instIdx];
+-
+-                // transform the pixel ray (BOTH ORIGIN AND DIRECTION)
+                 pixelCoordinates localRay = transformRay(ray, instance.inverseTransform);
++                BLAS& currentBlas = blasList[instance.BLASindex];
++                const Mesh& currentMesh = meshes[instance.BLASindex];
+ 
+-                // use transformed ray to traverse BLAS of TLAS instance
+-                // get BLAS in the TLAS instance
+-                BLAS& currentBlas = BLASlist[instance.BLASindex];
+-
+-                // create stack for BLAS traversal
+                 uint32_t blasStack[64];
+                 uint32_t blasStackPtr = 0;
+-                blasStack[blasStackPtr++] = 0; // Start at BLAS root
++                blasStack[blasStackPtr++] = 0;
+ 
+                 while (blasStackPtr > 0) {
+                     BLAS_node& blasNode = currentBlas.nodes[blasStack[--blasStackPtr]];
+ 
+-                    // if the ray misses the BLAS node
+-                    if (!intersectAABB(localRay, blasNode.minAABB, blasNode.maxAABB, closestT)) {
+-                        continue;
+-                    }
+-                    // current BLAS node is a leaf
++                    if (!intersectAABB(localRay, blasNode.minAABB, blasNode.maxAABB, tBoxEntry, rec.t)) continue;
++
+                     if (blasNode.triangleCount > 0) {
+-                        const Mesh& currentMesh = meshList[instance.BLASindex];
+-
+-                        for (uint32_t t = 0; t < blasNode.triangleCount; t++) {
+-                            // 1. Get the index of the triangle from the BVH leaf
+-                            uint32_t triTableIdx = currentBlas.triangleIndices[blasNode.leftFirst + t];
+-
+-                            // 2. Get the actual triangle (vertex indices) from the mesh
+-                            const Triangle& tri = currentMesh.indices[triTableIdx];
+-
+-                            // 3. Perform the intersection test
++                        for (int t = 0; t < blasNode.triangleCount; t++) {
++                            uint32_t triIdx = currentBlas.triangleIndices[blasNode.leftFirst + t];
++                            const Triangle& tri = currentMesh.indices[triIdx];
+                             float t_hit = intersectTriangle(localRay, tri, currentMesh.vertices);
+ 
+-                            if (t_hit < closestT) {
+-                                closestT = t_hit;
+-                                // Record hit info here (normal, material, etc.)
++                            if (t_hit < rec.t) {
++                                rec.t = t_hit;
++                                rec.hit = true;
++                                rec.instanceID = instIdx;
++                                rec.triangleID = triIdx;
++                                rec.worldPos = {
++                                    ray.origin.x + ray.directionVector.x * t_hit,
++                                    ray.origin.y + ray.directionVector.y * t_hit,
++                                    ray.origin.z + ray.directionVector.z * t_hit
++                                };
++
++                                const Vec3& v0 = currentMesh.vertices[tri.v0].pos;
++                                const Vec3& v1 = currentMesh.vertices[tri.v1].pos;
++                                const Vec3& v2 = currentMesh.vertices[tri.v2].pos;
++                                Vec3 e1 = { v1.x - v0.x, v1.y - v0.y, v1.z - v0.z };
++                                Vec3 e2 = { v2.x - v0.x, v2.y - v0.y, v2.z - v0.z };
++                                Vec3 localN = norm(cross(e1, e2));
++
++                                glm::mat4 normMat = glm::transpose(instance.inverseTransform);
++                                glm::vec4 worldN = normMat * glm::vec4(localN.x, localN.y, localN.z, 0.0f);
++                                rec.worldNormal = norm({worldN.x, worldN.y, worldN.z});
+                             }
+                         }
+-                    }
+-                    else { // Internal BLAS node: Push children
+-                        // Typically leftFirst and leftFirst + 1 for simple BVHs
++                    } else {
+                         blasStack[blasStackPtr++] = blasNode.leftFirst + 1;
+                         blasStack[blasStackPtr++] = blasNode.leftFirst;
+                     }
+                 }
+             }
++        } else {
++            tlasStack[tlasStackPtr++] = node.leftIndex + 1;
++            tlasStack[tlasStackPtr++] = node.leftIndex;
+         }
+     }
+ }
++
++// -----------------------------------------------------------
++// 3. MAIN RAYTRACER FUNCTION (UPDATED CONVENTION)
++// -----------------------------------------------------------
+ 
+ void raytracer() {
+-    // start timer
++    std::cout << "Starting Raytrace..." << std::endl;
+     Uint32 renderStart = SDL_GetTicks();
+ 
++    // Camera at Origin
++    Vec3 cameraOrigin = {0, 0, 0};
++    float aspectRatio = (float)WIDTH / (float)HEIGHT;
++    float scale = std::tan(cameraFOV * 0.5f * PI / 180.0f);
++
++    if (pixels.size() != WIDTH * HEIGHT) pixels.resize(WIDTH * HEIGHT);
++
++    for (int y = 0; y < HEIGHT; y++) {
++        for (int x = 0; x < WIDTH; x++) {
++            // Screen plane calculation
++            // +X is Right
++            // +Y is Up
++            float px = (2.0f * (x + 0.5f) / WIDTH - 1.0f) * scale * aspectRatio;
++            float py = (1.0f - 2.0f * (y + 0.5f) / HEIGHT) * scale;
++
++            pixelCoordinates ray;
++            ray.origin = cameraOrigin;
++
++            // UPDATED: +Z is Forward
++            Vec3 dir = { px, py, 1.0f };
++            ray.directionVector = norm(dir);
++
++            hitRecord rec;
++            traverseBVH(mainTLAS, BLASlist, meshList, ray, rec);
++
++            int pixelIndex = y * WIDTH + x;
++            if (rec.hit) {
++                // Shading (Lighting)
++                Vec3 lightDir = norm(sub(lightPos, rec.worldPos));
++                float diff = std::max(0.1f, dot(rec.worldNormal, lightDir));
++                int c = (int)(255.0f * diff);
++                pixels[pixelIndex] = (0xFF << 24) | (c << 16) | (c << 8) | c;
++            } else {
++                pixels[pixelIndex] = 0xFF222222;
++            }
++        }
++    }
++
++    void* mPixels; int mPitch;
++    SDL_LockTexture(app.texture, nullptr, &mPixels, &mPitch);
++    std::memcpy(mPixels, pixels.data(), pixels.size() * sizeof(uint32_t));
++    SDL_UnlockTexture(app.texture);
++
++    std::cout << "Raytrace Complete in " << (SDL_GetTicks() - renderStart) << "ms" << std::endl;
+ }
+\ No newline at end of file
