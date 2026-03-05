@@ -4,7 +4,10 @@
 
 #include "meshProcessing.h"
 #include "dataTypes.h"
+#include <algorithm>
+#include <cmath>
 #include <unordered_map>
+#include <vector>
 
 void normalizeMesh(Mesh &mesh) {
   float maxDist = 0;
@@ -22,11 +25,6 @@ void normalizeMesh(Mesh &mesh) {
     v.pos.z *= scale;
   }
 }
-
-#include <algorithm>
-#include <cmath>
-#include <unordered_map>
-#include <vector>
 
 void triangulateMesh(Mesh &mesh, const std::vector<PolygonFace> &inputFaces) {
   mesh.indices.clear();

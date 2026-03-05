@@ -95,6 +95,14 @@ bool isShadowed(TLAS &tlas, std::vector<BLAS> &blasList,
 
 // Executes the raytracing pass, calculates shading, and updates the global
 // pixel buffer
+
+// clamp color values to 0-255
+uint32_t packColor(Vec3 color);
+
+// cast ray recursive function
+void castRay(pixelCoordinates &ray, hitRecord &rec, int depth);
+
+// main raytracer function
 void raytracer();
 
 #endif // RENDERENGINEV2_RAYTRACER_H

@@ -55,7 +55,6 @@ inline ShadingType currentShadingType;
 inline MappingType currentMapping;
 inline int subdivisionLevel;
 inline SubdivMode currentSubdivisionType;
-inline ShadingMode globalShadingMode = PHONG_MODE;
 
 inline bool autoRotateObject;
 inline bool autoRotateLight;

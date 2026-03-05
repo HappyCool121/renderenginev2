@@ -8,17 +8,13 @@ const int TARGET_FPS = 60;
 const int FRAME_DELAY = 1000 / TARGET_FPS;
 
 // =========================================================
-// HELPER: Compute Normals (Smooth Shading)
-// =========================================================
-
-// =========================================================
-// MAIN
+// MAIN RUN
 // =========================================================
 
 int main(int argc, char *argv[]) {
   std::cout << "--- Raytracer Engine V2 Start ---" << std::endl;
 
-  // 1. Initialize System
+  // 1. INIT SDL and IMGUI
   app = initSDL();
   initIMGUI(app);
 
@@ -28,55 +24,96 @@ int main(int argc, char *argv[]) {
 
   pixels.resize(WIDTH * HEIGHT);
 
-  // 2. Load Geometry
+  // 2. LOAD PRIMITIVE GEOMETRY
   std::cout << "Loading Geometry..." << std::endl;
 
-  // Load the primitive (likely loads "custom" gltf or default shape)
-
+  // Load the primitives to object space (likely loads "custom" gltf or default
+  // shape)
   objectToTextureIndex.clear();
-
   currentObjectID = 0;
 
   SetObjectType(CUSTOM);
-
   SetObjectType(CUBE);
+  SetObjectType(UV_SPHERE);
 
-  currentShadingType = PHONG;
+  // 3. MATERIAL INITIALIZATION
+  globalMaterials.clear();
 
-  // --- FIX: COMPUTE NORMALS HERE ---
+  // 0: Cube Material (Flat, very shiny)
+  Material cubeMat;
+  cubeMat.name = "Cube Material";
+  cubeMat.shadingMode = FLAT_MODE;
+  cubeMat.kAmbient = 0.1f;
+  cubeMat.kDiffuse = 0.8f;
+  cubeMat.kSpecular = 0.5f;
+  cubeMat.reflectivity = 0.8f;
+  globalMaterials.push_back(cubeMat);
+
+  // 1: Cube Material (phong, shiny) for custom model
+  Material phongMat;
+  phongMat.name = "Phong Material";
+  phongMat.shadingMode = PHONG_MODE;
+  phongMat.kAmbient = 0.1f;
+  phongMat.kDiffuse = 0.8f;
+  phongMat.kSpecular = 0.5f;
+  phongMat.reflectivity = 0.3f;
+  globalMaterials.push_back(phongMat);
+
+  // 2: Glass Material (Refractive)
+  Material glassMat;
+  glassMat.name = "Glass";
+  glassMat.shadingMode = PHONG_MODE;
+  glassMat.kAmbient = 0.0f;
+  glassMat.kDiffuse = 0.1f;
+  glassMat.kSpecular = 1.0f;
+  glassMat.shininess = 128.0f;
+  glassMat.reflectivity = 0.1f;
+  glassMat.transmission = 1.0f;
+  glassMat.ior = 1.5f;
+  glassMat.albedo = {1.0f, 1.0f, 1.0f};
+  globalMaterials.push_back(glassMat);
+
+  // 4. COMPUTE NORMALS FOR MESH (*normals not extracted for custom objects)
   std::cout << "Computing Normals..." << std::endl;
   for (Mesh &mesh : meshList) {
     computeNormals(mesh);
   }
-  // ---------------------------------
 
   std::cout << "Creating Instances..." << std::endl;
   renderObjectList.clear();
 
   std::cout << "first texture name: " << globalTextures[0].name << std::endl;
 
-  // Object 1:
+  // 5. DEFINE OBJECTS TO RENDER IN SCENE
+
+  // cube
   renderObject obj1{};
   obj1.meshIndex = 1;
-  // Adjust position so it's clearly in front of the camera (assuming +Z
-  // forward)
-  obj1.translation = {1.0f, 0.0f, 2.0f};
-  // Ensure rotation doesn't flip normals inside out (180 on X flips Y and Z)
+  obj1.translation = {1.0f, 0.0f, 3.0f};
   obj1.rotation = {0.0f, 60.0f, 0.0f};
   obj1.scale = {1.0f, 1.0f, 1.0f};
+  obj1.materialID = 0; // cube material
   renderObjectList.push_back(obj1);
 
+  // custom object
   renderObject obj2{};
   obj2.meshIndex = 0;
-  // Adjust position so it's clearly in front of the camera (assuming +Z
-  // forward)
-  obj2.translation = {-1.0f, -0.6f, 2.0f};
-  // Ensure rotation doesn't flip normals inside out (180 on X flips Y and Z)
+  obj2.translation = {-1.0f, -0.6f, 3.0f};
   obj2.rotation = {180.0f, 180.0f, 0.0f};
   obj2.scale = {2.0f, 2.0f, 2.0f};
+  obj2.materialID = 1; // phong material
   renderObjectList.push_back(obj2);
 
-  // duplicate mesh primitives
+  // window object for refraction
+  renderObject obj3{};
+  obj3.meshIndex = 2;
+  obj3.translation = {0.0f, 0.0f, 1.1f};
+  obj3.rotation = {45.0f, 20.0f, 0.0f};
+  obj3.scale = {0.5f, 0.5f, 0.5f};
+  obj3.materialID = 2; // glass material
+  renderObjectList.push_back(obj3);
+
+  // duplicate mesh primitives (only for complex scenes default to zero)
   for (size_t mIdx = 0; mIdx < meshList.size(); mIdx++) {
 
     int instancesToCreate = 0; // Let's make 3 of each
@@ -112,13 +149,13 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // Position light slightly in front and above
+  // light position (only one light source for now)
   lightPos = {0.0f, 10.0f, 0.0f};
 
-  // 3. Build BVH
+  // 6. Build BVH (both BLAS and TLAS)
   std::cout << "Building BLAS..." << std::endl;
   BLASlist.clear();
-  Uint32 BVHbuildStart = SDL_GetTicks();
+  Uint32 BVHbuildStart = SDL_GetTicks(); // start timer
 
   for (const Mesh &mesh : meshList) {
     BLAS blas;
@@ -143,10 +180,10 @@ int main(int argc, char *argv[]) {
   std::cout << "BVH Build Complete in " << (SDL_GetTicks() - BVHbuildStart)
             << "ms" << std::endl;
 
-  // 4. Raytrace
+  // 7. RAYTRACING PIPELINE
   raytracer();
 
-  // 5. Display Loop
+  // 8. DISPLAY LOOP
   std::cout << "Displaying Result..." << std::endl;
   bool running = true;
   SDL_Event event;
@@ -170,15 +207,6 @@ int main(int argc, char *argv[]) {
     ImGui::Begin("Status");
     ImGui::Text("Raytracer V2");
     ImGui::Text("Objects: %d", (int)renderObjectList.size());
-
-    // Shading Mode Toggle
-    const char *shadingModes[] = {"Phong", "Flat"};
-    int currentMode = (int)globalShadingMode;
-    if (ImGui::Combo("Shading Mode", &currentMode, shadingModes,
-                     IM_ARRAYSIZE(shadingModes))) {
-      globalShadingMode = (ShadingMode)currentMode;
-      raytracer(); // Trigger re-render
-    }
 
     if (ImGui::Button("Re-render (R)")) {
       raytracer();

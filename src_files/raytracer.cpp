@@ -148,6 +148,7 @@ void updateTLASInstanceTransform(const renderObject &obj,
       glm::scale(transform, glm::vec3(obj.scale.x, obj.scale.y, obj.scale.z));
 
   instance.transform = transform;
+  instance.materialID = obj.materialID;
   instance.inverseTransform = glm::inverse(transform);
   instance.BLASindex = obj.meshIndex;
 }
@@ -549,6 +550,7 @@ uint32_t packColor(Vec3 color) {
 
 // THE CORE RECURSIVE FUNCTION
 Vec3 castRay(pixelCoordinates &ray, int depth) {
+
   // 1. Base Case: Stop recursion to prevent infinite loops
   if (depth <= 0) {
     return {0.0f, 0.0f, 0.0f};
@@ -558,12 +560,13 @@ Vec3 castRay(pixelCoordinates &ray, int depth) {
   hitRecord rec;
   traverseBVH(mainTLAS, BLASlist, meshList, ray, rec);
 
-  // 3. Miss Shader (Background Color)
+  // 3. Miss Shader (Background Color) // if the ray doesn't hit any object,
+  // return dark grey background color
   if (!rec.hit) {
     return {0.01f, 0.01f, 0.01f}; // Dark Grey Background
   }
 
-  // --- DATA RETRIEVAL ---
+  // if hit, get the instance and mesh data
   TLASinstance &instance = TLASinstanceList[rec.instanceID];
   const Mesh &mesh = meshList[instance.BLASindex];
   const Triangle &tri = mesh.indices[rec.triangleID];
@@ -578,12 +581,19 @@ Vec3 castRay(pixelCoordinates &ray, int depth) {
   float v = rec.uv.y;
   float w = 1.0f - u - v;
 
-  // --- NORMAL CALCULATION ---
+  // --- MATERIAL FETCH ---
+  const Material &mat = (instance.materialID < globalMaterials.size())
+                            ? globalMaterials[instance.materialID]
+                            : Material(); // Default fallback
+
+  // --- NORMAL CALCULATION --- (two methods: interpolation for smooth shading
+  // and flat normals used for low poly)
   Vec3 worldNormal;
 
-  if (globalShadingMode == FLAT_MODE) {
-    // 1. FLAT SHADING PIPELINE: Uses the geometric face normal
-    // No barycentric interpolation is required for the normal itself
+  if (mat.shadingMode == FLAT_MODE) {
+
+    // 1. FLAT SHADING PIPELINE: Uses the geometric face normal (normal is the
+    // same for all vertices in a triangle)
     Vec3 faceNormal = calculateFaceNormal(v0.pos, v1.pos, v2.pos);
 
     // Transform Normal to World Space
@@ -592,7 +602,9 @@ Vec3 castRay(pixelCoordinates &ray, int depth) {
         invTrans * glm::vec4(faceNormal.x, faceNormal.y, faceNormal.z, 0.0f);
     worldNormal = norm({worldN.x, worldN.y, worldN.z});
   } else {
-    // 2. PHONG SHADING PIPELINE: Interpolates normals per vertex
+
+    // 2. PHONG SHADING PIPELINE: Interpolates normals per vertex (normal is
+    // different for each vertex in a triangle)
     Vec3 smoothNormal;
     smoothNormal.x = w * v0.normal.x + u * v1.normal.x + v * v2.normal.x;
     smoothNormal.y = w * v0.normal.y + u * v1.normal.y + v * v2.normal.y;
@@ -610,12 +622,15 @@ Vec3 castRay(pixelCoordinates &ray, int depth) {
                    ray.origin.y + ray.directionVector.y * rec.t,
                    ray.origin.z + ray.directionVector.z * rec.t};
 
-  // --- TEXTURING ---
+  // Use material albedo if no texture is present or fallback (recall that
+  // texture is tied to object ID, not material)
+  Vec3 baseColor =
+      mat.albedo; // albedo is the default image if no texture is present
+
+  // --- TEXTURE LOOKUP ---
   // Interpolate UVs
   float texU = w * v0.uv.x + u * v1.uv.x + v * v2.uv.x;
   float texV = w * v0.uv.y + u * v1.uv.y + v * v2.uv.y;
-
-  Vec3 baseColor = {1.0f, 1.0f, 1.0f}; // Default White
 
   // Texture Lookup
   int objID = v0.objectID;
@@ -644,7 +659,8 @@ Vec3 castRay(pixelCoordinates &ray, int depth) {
     }
   }
 
-  // --- LIGHTING (Blinn-Phong) ---
+  // --- LIGHTING (Blinn-Phong algorithm; ambient + diffuse + specular) ---
+  // secondary rays: shadow, reflective, refractive
   Vec3 lightVec = sub(lightPos, worldPos);
   float distToLight = len(lightVec);
   Vec3 lightDir = norm(lightVec);
@@ -652,84 +668,134 @@ Vec3 castRay(pixelCoordinates &ray, int depth) {
   Vec3 viewDir = norm(scale(ray.directionVector, -1.0f));
   Vec3 halfway = norm(add(lightDir, viewDir));
 
+  // --- BASE COLOR ---
+
   // Ambient
-  float ambientStrength = 0.1f;
-  Vec3 ambient = scale(baseColor, ambientStrength);
+  Vec3 ambient = scale(baseColor, mat.kAmbient);
 
   // Shadow Check
   bool shadowed = false;
   float NdotL = dot(worldNormal, lightDir);
 
-  if (NdotL > 0.0f) {
+  if (mat.receivesShadows && NdotL > 0.0f) {
+
     // Offset to prevent shadow acne
     Vec3 shadowOrigin = add(worldPos, scale(worldNormal, 0.001f));
+
+    // anyhit ray traversal algorithm
     shadowed = isShadowed(mainTLAS, BLASlist, meshList, shadowOrigin, lightDir,
                           distToLight);
-  } else {
+  } else if (NdotL <= 0.0f) {
     shadowed = true; // Face points away from light
   }
 
   // Diffuse
   float diff = shadowed ? 0.0f : std::max(0.0f, NdotL);
-  Vec3 diffuse = scale(baseColor, diff);
+  Vec3 diffuse = scale(baseColor, diff * mat.kDiffuse);
 
   // Specular
-  float specStrength = 0.5f;
   float spec = 0.0f;
   if (!shadowed && diff > 0.0f) {
     float NdotH = std::max(0.0f, dot(worldNormal, halfway));
-    spec = std::pow(NdotH, 32.0f);
+    spec = std::pow(NdotH, mat.shininess);
   }
-  Vec3 specular = {spec * specStrength, spec * specStrength,
-                   spec * specStrength};
+  Vec3 specular = {spec * mat.kSpecular, spec * mat.kSpecular,
+                   spec * mat.kSpecular};
 
   Vec3 localColor = add(add(ambient, diffuse), specular);
 
-  // --- REFLECTION ---
-  // Hardcoded reflectivity for now (0.0 = Matte, 1.0 = Mirror)
-  // Ideally store this in a Material struct
-  float reflectivity = 0.5f;
+  // --- REFLECTION & REFRACTION ---
 
-  if (reflectivity > 0.0f) {
-    // R = I - 2(N.I)N
+  float reflectivity = mat.reflectivity;
+  float transmission = mat.transmission;
+
+  Vec3 reflectionColor = {0, 0, 0};
+  Vec3 refractionColor = {0, 0, 0};
+
+  // 1. Compute Reflection
+  if (reflectivity > 0.0f || transmission > 0.0f) {
     float dotNI = dot(worldNormal, ray.directionVector);
     Vec3 reflectionDir =
         sub(ray.directionVector, scale(worldNormal, 2.0f * dotNI));
     reflectionDir = norm(reflectionDir);
 
-    // Offset origin to prevent acne
-    Vec3 offsetOrigin = add(worldPos, scale(worldNormal, 0.0000001f));
-
+    Vec3 offsetOrigin = add(worldPos, scale(worldNormal, 0.001f));
     pixelCoordinates reflectedRay;
     reflectedRay.origin = offsetOrigin;
     reflectedRay.directionVector = reflectionDir;
 
-    // Recursive call
-    Vec3 reflectedColor = castRay(reflectedRay, depth - 1);
-
-    // E. Mix Local and Reflected Color
-    // Formula: (1 - k) * Local + k * Reflected
-    Vec3 localPart = scale(localColor, 1.0f - reflectivity);
-    Vec3 reflPart = scale(reflectedColor, reflectivity);
-    Vec3 finalColor = add(localPart, reflPart);
-
-    return finalColor;
+    reflectionColor = castRay(reflectedRay, depth - 1);
   }
+
+  // 2. Compute Refraction
+  if (transmission > 0.0f) {
+    float ior = mat.ior;
+    float eta;
+    Vec3 n = worldNormal;
+    float cosTheta = dot(ray.directionVector, worldNormal);
+
+    if (cosTheta < 0) {
+      // Entering object
+      eta = 1.0f / ior;
+      cosTheta = -cosTheta;
+    } else {
+      // Exiting object
+      eta = ior;
+      n = scale(worldNormal, -1.0f);
+    }
+
+    float k = 1.0f - eta * eta * (1.0f - cosTheta * cosTheta);
+    if (k >= 0.0f) {
+      // Refraction path
+      Vec3 refractionDir = add(scale(ray.directionVector, eta),
+                               scale(n, eta * cosTheta - std::sqrt(k)));
+      refractionDir = norm(refractionDir);
+
+      Vec3 offsetOrigin =
+          add(worldPos, scale(n, -0.001f)); // Push ray inside/outside
+      pixelCoordinates refractedRay;
+      refractedRay.origin = offsetOrigin;
+      refractedRay.directionVector = refractionDir;
+
+      refractionColor = castRay(refractedRay, depth - 1);
+    } else {
+      // Total Internal Reflection
+      refractionColor = reflectionColor;
+    }
+  }
+
+  // Mix colors
+  if (transmission > 0.0f) {
+    // Basic mix of local, reflection and refraction
+    // Using Schlick's approximation for Fresnel could be better, but sticking
+    // to requested simple transmission for now
+    Vec3 combined =
+        add(scale(localColor, (1.0f - reflectivity) * (1.0f - transmission)),
+            add(scale(reflectionColor, reflectivity),
+                scale(refractionColor, transmission)));
+    return combined;
+  } else if (reflectivity > 0.0f) {
+    Vec3 localPart = scale(localColor, 1.0f - reflectivity);
+    Vec3 reflPart = scale(reflectionColor, reflectivity);
+    return add(localPart, reflPart);
+  }
+
+  return localColor;
 
   return localColor;
 }
 void raytracer() {
   std::cout << "Starting Raytrace..." << std::endl;
-  Uint32 renderStart = SDL_GetTicks();
+  Uint32 renderStart = SDL_GetTicks(); // start timer
 
-  Vec3 cameraOrigin = {0, 0, 0};
-  float aspectRatio = (float)WIDTH / (float)HEIGHT;
-  float scale = std::tan(cameraFOV * 0.5f * PI / 180.0f);
+  Vec3 cameraOrigin = {0, 0, 0};                    // camera position (default)
+  float aspectRatio = (float)WIDTH / (float)HEIGHT; // aspect ratio
+  float scale = std::tan(cameraFOV * 0.5f * PI / 180.0f); // scale
 
   if (pixels.size() != WIDTH * HEIGHT)
     pixels.resize(WIDTH * HEIGHT);
 
-  const int MAX_DEPTH = 3; // Max bounces
+  const int MAX_DEPTH = 3; // Max bounces (for reflection)
 
   for (int y = 0; y < HEIGHT; y++) {
     for (int x = 0; x < WIDTH; x++) {
